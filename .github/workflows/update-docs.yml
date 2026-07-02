@@ -1,0 +1,53 @@
+name: Update Terraform Docs
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "modules/**"
+
+permissions:
+  contents: write
+
+jobs:
+  docs:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Claude Code
+        run: |
+          npm install -g @anthropic-ai/claude-code
+
+      - name: Authenticate Claude
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          claude auth login --api-key "$ANTHROPIC_API_KEY"
+
+      - name: Generate Documentation
+        run: |
+          claude \
+            "Update the README for any Terraform modules changed in this commit using the terraform-docs skill."
+
+      - name: Checkout aws-deploys
+        uses: actions/checkout@v4
+        with:
+          repository: your-org/aws-deploys
+          path: aws-deploys
+          token: ${{ secrets.AWS_DEPLOYS_TOKEN }}
+
+      - name: Copy generated documentation
+        run: |
+          # Copy README files to aws-deploys here
+
+      - name: Commit changes
+        run: |
+          cd aws-deploys
+          git config user.name github-actions
+          git config user.email github-actions@github.com
+          git add .
+          git commit -m "docs: update Terraform documentation" || exit 0
+          git push
