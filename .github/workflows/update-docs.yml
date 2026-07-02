@@ -5,48 +5,85 @@ on:
     branches:
       - main
 
+  workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
-  docs:
+  generate-docs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout aws-iac
+        uses: actions/checkout@v4
 
-      - name: Install Claude Code
+      - name: Install jq
         run: |
-          npm install -g @anthropic-ai/claude-code
+          sudo apt-get update
+          sudo apt-get install -y jq
 
-      - name: Authenticate Claude
+      - name: Read Terraform Module
+        run: |
+          find vpc-modules -name "*.tf" -exec cat {} \; > terraform.txt
+
+      - name: Generate README with Claude
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
-          claude auth login --api-key "$ANTHROPIC_API_KEY"
+          CODE=$(cat terraform.txt)
 
-      - name: Generate Documentation
-        run: |
-          claude \
-            "Update the README for any Terraform modules changed in this commit using the terraform-docs skill."
+          jq -n \
+            --arg code "$CODE" \
+            '{
+              model:"claude-sonnet-4",
+              max_tokens:6000,
+              messages:[
+                {
+                  role:"user",
+                  content:
+                  "You are a Terraform documentation expert.\n\nGenerate a professional README.md.\n\nInclude:\n\n- Module Overview\n- Architecture\n- Requirements\n- Providers\n- Resources\n- Inputs\n- Outputs\n- Example Usage\n- Notes\n\nReturn Markdown only.\n\nTerraform Code:\n\n" + $code
+                }
+              ]
+            }' > request.json
+
+          curl https://api.anthropic.com/v1/messages \
+            --silent \
+            --header "x-api-key: $ANTHROPIC_API_KEY" \
+            --header "anthropic-version: 2023-06-01" \
+            --header "content-type: application/json" \
+            --data @request.json \
+            > response.json
+
+          cat response.json
+
+          jq -r '.content[0].text' response.json > README.md
 
       - name: Checkout aws-deploys
         uses: actions/checkout@v4
         with:
-          repository: your-org/aws-deploys
-          path: aws-deploys
+          repository: eswar-sudo/aws-deploys
           token: ${{ secrets.AWS_DEPLOYS_TOKEN }}
+          path: aws-deploys
 
-      - name: Copy generated documentation
+      - name: Copy README
         run: |
-          # Copy README files to aws-deploys here
+          mkdir -p aws-deploys/docs/modules/vpc-modules
+          cp README.md aws-deploys/docs/modules/vpc-modules/README.md
 
-      - name: Commit changes
+      - name: Commit Changes
         run: |
           cd aws-deploys
-          git config user.name github-actions
-          git config user.email github-actions@github.com
+
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+
           git add .
-          git commit -m "docs: update Terraform documentation" || exit 0
+
+          if git diff --cached --quiet; then
+            echo "No documentation changes."
+            exit 0
+          fi
+
+          git commit -m "docs: update Terraform documentation"
           git push
